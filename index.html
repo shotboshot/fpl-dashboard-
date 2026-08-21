@@ -1,0 +1,1234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>FPL Decision Dashboard</title>
+<meta name="description" content="Live Fantasy Premier League decision dashboard — what to do this week, and why." />
+<meta name="color-scheme" content="dark" />
+<meta name="theme-color" content="#150420" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="FPL" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23150420'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='19' font-weight='700' fill='%2300F086' text-anchor='middle'%3EF%3C/text%3E%3C/svg%3E" />
+<!--
+  ============================================================
+  HOW THIS FILE WORKS (read me — this is the learning bit)
+
+  1. init() calls /api/fpl?path=... — the server function in
+     api/fpl.js, which fetches the real FPL API. The browser
+     can't call FPL directly; servers can.
+  2. bootstrap-static gives every player's price, form, xGI,
+     set-piece order, FPL's own expected points and injury
+     status. fixtures gives the whole season's difficulty.
+     entry/<id>/... gives YOUR squad, bank and transfer history.
+  3. Everything else is plain JavaScript turning that into
+     decisions. The ACTIONS card at the top is the output that
+     matters: what to do, and why. Every card below it is the
+     evidence for one of those lines.
+  4. The AI brief posts these numbers to api/brief.js, which
+     calls Claude server-side (your key never reaches the
+     browser).
+
+  v2.3 — DESIGN PRINCIPLE WORTH KEEPING
+  A tool that shows five screens of analysis makes you act more,
+  and in FPL acting more loses points. So this version leads with
+  a single short action list, says "hold" out loud when holding
+  is right, and shows the bar a transfer has to clear. Analysis
+  is demoted to evidence. Restraint is a feature.
+  ============================================================
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;900&family=Sora:wght@400;600&family=IBM+Plex+Mono:wght@500&display=swap" />
+<style>
+  :root {
+    --bg:#150420; --surface:#221033; --surface2:#2C173F; --line:#3D2454;
+    --ink:#F3ECFA; --dim:#A88FC4; --faint:#735C8F;
+    --lime:#00F086; --limedark:#024D2E; --lilac:#B58CFF;
+    --warn:#FFB547; --danger:#FF5C7A;
+    --mono:'IBM Plex Mono',ui-monospace,monospace; --body:'Sora',system-ui,sans-serif; --disp:'Unbounded',system-ui,sans-serif;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font-family:var(--body); padding-bottom:60px; -webkit-text-size-adjust:100%; }
+  .shell { max-width:760px; margin:0 auto; padding:0 16px; }
+  header { border-bottom:1px solid var(--line); padding:22px 0 16px; margin-bottom:16px; }
+  h1 { font-family:var(--disp); font-weight:900; font-size:24px; line-height:1.15; margin:6px 0 2px; }
+  .label { font-family:var(--mono); font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:var(--lilac); }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+  .card.hero { border-color:var(--lime); background:linear-gradient(160deg,#1B0B2B,#221033); }
+  .dim { color:var(--dim); } .mono { font-family:var(--mono); }
+  .row { display:flex; align-items:center; gap:10px; }
+  input { background:var(--surface2); border:1px solid var(--line); color:var(--ink); border-radius:9px; padding:10px 12px; font-family:var(--mono); font-size:16px; }
+  input:focus-visible, button:focus-visible { outline:2px solid var(--lime); outline-offset:2px; }
+  button.primary { background:var(--limedark); border:1px solid var(--lime); color:var(--lime); border-radius:9px; padding:10px 18px; font-family:var(--disp); font-size:12px; font-weight:700; cursor:pointer; }
+  button.primary[disabled] { opacity:.55; cursor:progress; }
+  .listrow { display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid rgba(61,36,84,.35); }
+  .badge { font-family:var(--mono); font-size:9px; padding:2px 6px; border-radius:5px; border:1px solid var(--line); color:var(--lilac); letter-spacing:.08em; white-space:nowrap; }
+  .badge.pen { color:#06200F; background:var(--lime); border-color:var(--lime); font-weight:700; }
+  .badge.sp  { color:var(--lime); border-color:rgba(0,240,134,.5); }
+  .badge.tpl { color:var(--warn); border-color:rgba(255,181,71,.5); }
+  .badge.dif { color:var(--lilac); border-color:rgba(181,140,255,.5); }
+  .armband { margin:12px -16px; padding:14px 16px; background:linear-gradient(90deg,var(--limedark),transparent); border-left:4px solid var(--lime); display:flex; align-items:center; gap:12px; }
+  .armband.vice { background:linear-gradient(90deg,rgba(181,140,255,.16),transparent); border-left-color:var(--lilac); }
+  .cbadge { width:38px; height:38px; flex:0 0 38px; border-radius:50%; background:var(--lime); color:#06200F; font-family:var(--disp); font-weight:900; font-size:19px; display:flex; align-items:center; justify-content:center; }
+  .cbadge.vice { background:var(--lilac); color:#1B0B33; font-size:14px; }
+  .fdr { font-family:var(--mono); font-size:10px; padding:2px 7px; border-radius:5px; white-space:nowrap; }
+  .fdr1,.fdr2 { background:#0A3D26; color:var(--lime); } .fdr3 { background:#3A2E10; color:var(--warn); }
+  .fdr4,.fdr5 { background:#3D1320; color:var(--danger); }
+  .fdr0 { background:var(--surface2); color:var(--faint); }
+  .small { font-size:11px; line-height:1.5; }
+  .err { border-color:var(--danger); color:var(--danger); }
+  .hide { display:none; }
+  .breakdown { font-family:var(--mono); font-size:10.5px; color:var(--dim); margin:3px 0 0 28px; }
+  .bench { opacity:.5; }
+  .gwcol { display:flex; flex-direction:column; align-items:center; gap:3px; min-width:42px; }
+  .gwnum { font-family:var(--mono); font-size:8.5px; color:var(--faint); letter-spacing:.06em; }
+  .runwrap { display:flex; gap:5px; flex:1; overflow-x:auto; padding-bottom:2px; }
+  .linkish { background:none; border:none; color:var(--lilac); font:inherit; font-size:11px; text-decoration:underline; cursor:pointer; padding:0; }
+  /* Action list: the verb is the headline, the reason is the small print. */
+  .act { display:flex; gap:11px; padding:11px 0; border-bottom:1px solid rgba(61,36,84,.4); }
+  .act:last-child { border-bottom:none; }
+  .actmark { flex:0 0 22px; font-family:var(--mono); font-size:14px; line-height:1.3; text-align:center; }
+  .actdo { font-size:13.5px; font-weight:600; line-height:1.35; }
+  .actwhy { font-size:11.5px; color:var(--dim); line-height:1.55; margin-top:3px; }
+  .xp { font-family:var(--mono); font-size:10px; color:var(--faint); }
+  @media (prefers-reduced-motion:reduce){ *{animation:none!important; transition:none!important;} }
+</style>
+</head>
+<body>
+<header><div class="shell">
+  <div class="label" id="gwLabel">Loading…</div>
+  <h1>FPL Decision<br>Dashboard<span style="color:var(--lime)">.</span></h1>
+  <div class="dim" style="font-size:13px" id="deadline"></div>
+</div></header>
+
+<div class="shell">
+
+  <div class="card err hide" id="errorCard" role="alert"></div>
+  <div class="card hide" id="staleCard" style="border-color:rgba(255,181,71,.5); color:var(--warn); font-size:12.5px"></div>
+  <div class="card hide" id="preseasonCard" style="border-color:rgba(255,181,71,.4)">
+    <div class="label" style="color:var(--warn)">Off-season mode</div>
+    <div class="small" style="color:#EAD9C0; margin-top:6px">
+      Every gameweek in the API is finished and there's no next one, so the season is over
+      (or the new one isn't set up yet). The cards below show whatever the API currently returns.
+    </div>
+  </div>
+
+  <!-- THE OUTPUT: what to do this week, and why -->
+  <div class="card hero hide" id="actionsCard">
+    <div class="label" style="color:var(--lime)">Do this week — <span id="actionsGw"></span></div>
+    <div id="actionsBody" style="margin-top:6px"></div>
+    <div class="dim small" style="margin-top:12px" id="actionsFoot"></div>
+  </div>
+
+  <!-- how last week's calls actually did -->
+  <div class="card hide" id="reviewCard">
+    <div class="label">How last week's calls did</div>
+    <div id="reviewBody" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card" id="setupCard">
+    <div class="label">Your FPL team</div>
+    <div class="row" style="margin-top:10px; flex-wrap:wrap">
+      <input id="teamIdInput" inputmode="numeric" enterkeyhint="go" placeholder="FPL team ID e.g. 1234567" style="flex:1 1 160px" aria-label="FPL team ID" />
+      <button class="primary" id="loadBtn" onclick="saveTeamId()">Load my team</button>
+    </div>
+    <div class="dim small" style="margin-top:10px">
+      Find it on the FPL site: Points page → the number in the address bar after <span class="mono">/entry/</span>.
+      Picks are public after each deadline — no password needed, nothing is stored anywhere except this browser.
+    </div>
+    <div id="teamInfo" class="small" style="margin-top:10px" aria-live="polite"></div>
+  </div>
+
+  <div class="card hide" id="lockedCard" style="border-color:rgba(181,140,255,.4)">
+    <div class="label">Squad unlocks at the deadline</div>
+    <div class="small dim" style="margin-top:8px; line-height:1.6">
+      FPL doesn't publish anyone's picks until the gameweek deadline passes — including yours.
+      The action list, captaincy, fixture runs, transfer ideas and the AI brief appear automatically
+      the moment it does, and stay available for the rest of the season. Draft your squad on the
+      official site for now; this dashboard is for deciding, not drafting.
+    </div>
+  </div>
+
+  <div class="card hide" id="bdgwCard">
+    <div class="label">Blank &amp; double gameweek alert</div>
+    <div id="bdgwBody" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card hide" id="captainCard">
+    <div class="label">Captaincy — <span id="captainGw"></span></div>
+    <div id="captainBody"></div>
+    <div class="dim small" style="margin-top:10px">
+      Score = attack + fixtures. Attack = (form ×2 + xGI/90 ×8 + set-piece bonus) × start reliability.
+      xGI (expected goal involvements per 90) measures chance quality, separating a real threat from
+      a lucky streak. The set-piece bonus rewards the first-choice penalty taker — the most reliable
+      edge in the game that raw stats miss. Start reliability uses starts per gameweek, so an impact
+      sub can't pass as a nailed starter. Fixtures = (6 − official difficulty) ×3 per fixture —
+      doubles count twice, blanks score zero. The vice is the best option from a different club.
+      <b>xP</b> is FPL's own expected-points forecast, shown as an independent second opinion —
+      when it disagrees loudly with this model, that disagreement is the interesting bit.
+    </div>
+  </div>
+
+  <div class="card hide" id="runsCard">
+    <div class="label">Fixture runs — your clubs, next 5 GWs</div>
+    <div id="runsBody" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card hide" id="transferCard">
+    <div class="label">Transfer ideas — next 5 GWs</div>
+    <div id="transferBody"></div>
+    <div class="dim small" style="margin-top:10px" id="transferFoot"></div>
+  </div>
+
+  <div class="card hide" id="priceCard">
+    <div class="label">Price watch — tonight</div>
+    <div id="priceBody" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card hide" id="briefCard" style="border-color:rgba(181,140,255,.4)">
+    <div class="label">AI weekly brief</div>
+    <div class="dim small" style="margin:8px 0">
+      Sends this dashboard's numbers to Claude and returns a written call: the captain case (and the
+      case against it), whether any transfer is worth making, and any trap in the data.
+      Runs on your own Anthropic API key — setup in the README, well under a penny per brief.
+    </div>
+    <button class="primary" id="briefBtn" onclick="generateBrief()">Generate brief</button>
+    <div id="briefBody" class="small" style="margin-top:12px; line-height:1.65; white-space:pre-wrap" aria-live="polite"></div>
+  </div>
+
+  <div class="card hide" id="chipsCard">
+    <div class="label">Chips</div>
+    <div id="chipsBody" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card hide" id="formCard">
+    <div class="label">Hottest players right now (all positions)</div>
+    <div id="formBody"></div>
+  </div>
+
+  <div class="dim small" style="padding:0 4px" id="footer"></div>
+</div>
+
+<script>
+"use strict";
+
+/* ---------------- state ---------------- */
+let DB = null;          // bootstrap-static: players, teams, events
+let FIX_ALL = [];       // every fixture in the season
+const HORIZON = 5;      // how many gameweeks ahead transfers look
+const GAIN_BAR = 6;     // a transfer must beat this over HORIZON GWs to be worth a free move
+let ENTRY = null;       // your team overview
+let PICKS = null;       // your 15 picks + bank
+let CHIPS = null;       // chips used
+let TRANSFERS = [];     // your transfer history — gives exact purchase prices
+let ACTIVE_GW = null;   // the gameweek we're deciding for
+
+const $ = (id) => document.getElementById(id);
+const POS = {1:"GK",2:"DEF",3:"MID",4:"FWD"};
+const fmtM = (n) => "£" + (n/10).toFixed(1) + "m";
+const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
+const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+
+const ESC_MAP = { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ESC_MAP[c]);
+
+/* ---------------- fetching ---------------- */
+async function api(path, { retries = 1, timeout = 9000 } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeout);
+    try {
+      const r = await fetch("/api/fpl?path=" + encodeURIComponent(path), { signal: ctrl.signal });
+      if (!r.ok) throw Object.assign(new Error("API " + r.status), { status: r.status });
+      return await r.json();
+    } catch (e) {
+      lastErr = e;
+      if (e.status >= 400 && e.status < 500) break;   // client error — retrying won't help
+      if (attempt < retries) await sleep(1200);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr;
+}
+
+/* ---------------- slimming + cache ----------------
+   Only the fields this app actually uses, so the whole thing fits in
+   localStorage as a last-good-data fallback. */
+const PLAYER_FIELDS = ["id","web_name","team","element_type","now_cost","form",
+  "points_per_game","total_points","status","news","chance_of_playing_next_round",
+  "expected_goal_involvements_per_90","minutes","selected_by_percent",
+  // v2.3 additions
+  "starts",                                  // real rotation signal, unlike raw minutes
+  "ep_next",                                 // FPL's own expected points — independent second opinion
+  "penalties_order",                         // 1 = first-choice penalty taker
+  "direct_freekicks_order",
+  "corners_and_indirect_freekicks_order",
+  "cost_change_start",                       // price movement since GW1 → exact purchase price
+  "transfers_in_event","transfers_out_event" // this gameweek's net transfer pressure
+];
+
+function slimDb(raw) {
+  if (!Array.isArray(raw?.elements) || !Array.isArray(raw?.events) || !Array.isArray(raw?.teams)) {
+    throw new Error("Unexpected API shape");
+  }
+  return {
+    total_players: raw.total_players || 0,   // active managers — used to scale transfer pressure
+    events: raw.events.map(e => ({ id:e.id, name:e.name, deadline_time:e.deadline_time,
+      is_current:e.is_current, is_next:e.is_next, finished:e.finished })),
+    teams: raw.teams.map(t => ({ id:t.id, name:t.name, short_name:t.short_name })),
+    elements: raw.elements.map(p => Object.fromEntries(PLAYER_FIELDS.map(f => [f, p[f]]))),
+  };
+}
+const slimFix = (raw) => (Array.isArray(raw) ? raw : []).map(f => ({ event:f.event,
+  team_h:f.team_h, team_a:f.team_a, team_h_difficulty:f.team_h_difficulty, team_a_difficulty:f.team_a_difficulty }));
+
+function saveCache() {
+  try { localStorage.setItem("fplCache", JSON.stringify({ t: Date.now(), db: DB, fixAll: FIX_ALL })); }
+  catch (e) { /* storage full or blocked — cache is a bonus, not a requirement */ }
+}
+function loadCache() {
+  try { return JSON.parse(localStorage.getItem("fplCache")); } catch (e) { return null; }
+}
+function showStale(t) {
+  const c = $("staleCard");
+  c.textContent = "Live fetch failed — showing saved data from " + new Date(t).toLocaleString() +
+    ". Numbers may be out of date; reload to retry.";
+  c.classList.remove("hide");
+}
+
+/* ---------------- indexes + memoisation ---------------- */
+let PLAYER_BY_ID = new Map();
+let TEAM_BY_ID   = new Map();
+let FIX_BY_EVENT = new Map();
+let EASE_CACHE   = new Map();
+let SCORE_CACHE  = new Map();
+
+function buildIndexes() {
+  PLAYER_BY_ID = new Map(DB.elements.map(p => [p.id, p]));
+  TEAM_BY_ID   = new Map(DB.teams.map(t => [t.id, t]));
+  FIX_BY_EVENT = new Map();
+  for (const f of FIX_ALL) {
+    if (f.event == null) continue;
+    if (!FIX_BY_EVENT.has(f.event)) FIX_BY_EVENT.set(f.event, []);
+    FIX_BY_EVENT.get(f.event).push(f);
+  }
+  EASE_CACHE.clear();
+  SCORE_CACHE.clear();
+}
+
+function safeRender(fn, cardId, label) {
+  try { fn(); } catch (e) {
+    console.error(label + " render failed:", e);
+    const c = $(cardId);
+    if (c) {
+      c.classList.remove("hide");
+      c.innerHTML = `<div class="label">${esc(label)}</div>
+        <div class="small" style="color:var(--warn);margin-top:8px">This card hit an error
+        (often an FPL API change between seasons) — the rest of the dashboard still works.
+        Tell Claude: “${esc(label)} card broke” plus what the browser console says.</div>`;
+    }
+  }
+}
+
+/* ---------------- boot ---------------- */
+init();
+async function init() {
+  try {
+    DB = slimDb(await api("bootstrap-static/"));
+    try { FIX_ALL = slimFix(await api("fixtures/")); }
+    catch (e) { FIX_ALL = loadCache()?.fixAll || []; }
+    saveCache();
+  } catch (e) {
+    const cached = loadCache();
+    if (cached?.db) {
+      DB = cached.db; FIX_ALL = cached.fixAll || []; showStale(cached.t);
+    } else {
+      return showError(
+        "Couldn't load FPL data. The FPL API is likely in maintenance or briefly down at a deadline. " +
+        "Reload in a minute — if it's mid-summer and still failing, the new season's game may not have launched yet."
+      );
+    }
+  }
+
+  buildIndexes();
+
+  const current = DB.events.find(e => e.is_current);
+  const next = DB.events.find(e => e.is_next);
+  ACTIVE_GW = next || current || null;
+
+  if (!ACTIVE_GW) {
+    $("preseasonCard").classList.remove("hide");
+    $("gwLabel").textContent = "Season complete · final data";
+  } else {
+    $("gwLabel").textContent = ACTIVE_GW.name + " · decisions";
+    startCountdown(ACTIVE_GW.deadline_time);
+    safeRender(renderBlankDouble, "bdgwCard", "Blank & double gameweek alert");
+  }
+
+  safeRender(renderGlobalForm, "formCard", "Hottest players");
+  renderFooter();
+
+  $("teamIdInput").addEventListener("keydown", (e) => { if (e.key === "Enter") saveTeamId(); });
+
+  const savedId = localStorage.getItem("fplTeamId");
+  if (savedId) { $("teamIdInput").value = savedId; loadTeam(savedId); }
+}
+
+function renderFooter() {
+  $("footer").innerHTML =
+    "Live data from the official FPL API · cached ≤5 min at the edge · loaded " +
+    esc(new Date().toLocaleTimeString()) +
+    ' · <button class="linkish" onclick="location.reload()">Refresh</button>';
+}
+
+function showError(msg) {
+  const c = $("errorCard");
+  c.textContent = msg;
+  c.classList.remove("hide");
+}
+
+/* ---------------- countdown ---------------- */
+let countdownTimer = null;
+function startCountdown(iso) {
+  const target = new Date(iso);
+  if (isNaN(target.getTime())) return;
+  const el = $("deadline");
+  const tick = () => {
+    const ms = target.getTime() - Date.now();
+    if (ms <= 0) {
+      el.innerHTML = 'Deadline passed — live gameweek. <button class="linkish" onclick="location.reload()">Reload for the new week</button>';
+      el.style.color = "var(--lime)";
+      return;
+    }
+    const d = Math.floor(ms/864e5), h = Math.floor(ms%864e5/36e5),
+          m = Math.floor(ms%36e5/6e4), s = Math.floor(ms%6e4/1000);
+    el.textContent = ms < 36e5
+      ? `Deadline: ${m}m ${String(s).padStart(2,"0")}s`
+      : `Deadline: ${d}d ${h}h ${m}m`;
+    el.style.color = ms < 9e5 ? "var(--danger)" : ms < 72e5 ? "var(--warn)" : "";
+    clearTimeout(countdownTimer);
+    countdownTimer = setTimeout(tick, ms < 36e5 ? 1000 : 30000);
+  };
+  tick();
+}
+
+/* ---------------- team loading ---------------- */
+function saveTeamId() {
+  const raw = $("teamIdInput").value.trim();
+  if (!/^\d{1,9}$/.test(raw)) {
+    $("teamInfo").innerHTML = '<span style="color:var(--danger)">That doesn\'t look like a team ID — it\'s digits only, e.g. 1234567.</span>';
+    return;
+  }
+  localStorage.setItem("fplTeamId", raw);
+  loadTeam(raw);
+}
+
+async function loadTeam(id) {
+  const btn = $("loadBtn");
+  btn.disabled = true; btn.textContent = "Loading…";
+  $("teamInfo").textContent = "Loading your team…";
+  try { await loadTeamInner(id); }
+  catch (e) {
+    console.error("loadTeam failed:", e);
+    $("teamInfo").innerHTML = '<span style="color:var(--warn)">Something went wrong loading your team — reload to try again.</span>';
+  }
+  finally { btn.disabled = false; btn.textContent = "Load my team"; }
+}
+
+async function loadTeamInner(id) {
+  try {
+    ENTRY = await api(`entry/${id}/`);
+  } catch (e) {
+    ENTRY = null;
+    if (e.status === 404) {
+      $("teamInfo").innerHTML = '<span style="color:var(--danger)">No team found with that ID — double-check the number after /entry/ on the FPL site.</span>';
+      return;
+    }
+    const tc = loadTeamCache();
+    if (tc && tc.id === id) {
+      ENTRY = tc.entry; PICKS = tc.picks; CHIPS = tc.chips; TRANSFERS = tc.transfers || [];
+      $("teamInfo").innerHTML = '<span style="color:var(--warn)">API hiccup — showing your team as saved on ' +
+        esc(new Date(tc.t).toLocaleString()) + '. Reload to retry.</span>';
+      renderTeamCards();
+      return;
+    }
+    $("teamInfo").innerHTML = '<span style="color:var(--warn)">Couldn\'t load the team right now (API hiccup) — your ID is saved, try reopening.</span>';
+    return;
+  }
+
+  const value = ENTRY.last_deadline_value, bank = ENTRY.last_deadline_bank;
+  $("teamInfo").innerHTML =
+    `<b>${esc(ENTRY.name)}</b> · ${esc(ENTRY.player_first_name)} ${esc(ENTRY.player_last_name)} · ` +
+    `<span class="mono" style="color:var(--lilac)">${(ENTRY.summary_overall_points ?? 0)} pts` +
+    (ENTRY.summary_overall_rank ? ` · rank ${ENTRY.summary_overall_rank.toLocaleString()}` : "") + `</span>` +
+    (Number.isFinite(value) ? `<div class="dim small" style="margin-top:4px">Squad value ${fmtM(value)} · in the bank ${fmtM(bank ?? 0)}</div>` : "");
+
+  const pickGw = DB.events.find(e => e.is_current) || [...DB.events].reverse().find(e => e.finished) || null;
+  PICKS = null;
+  if (pickGw) {
+    try { PICKS = await api(`entry/${id}/event/${pickGw.id}/picks/`); }
+    catch (e) { PICKS = null; }
+  }
+  $("lockedCard").classList.toggle("hide", !!PICKS);
+
+  try { CHIPS = await api(`entry/${id}/history/`); } catch (e) { CHIPS = null; }
+  // Transfer history gives the exact price you paid for each player, which is
+  // the only way to compute a real selling price. Optional — everything still
+  // works without it, just with the old ±£0.2m approximation.
+  try { const t = await api(`entry/${id}/transfers/`); TRANSFERS = Array.isArray(t) ? t : []; }
+  catch (e) { TRANSFERS = []; }
+
+  try { localStorage.setItem("fplTeamCache", JSON.stringify({ t: Date.now(), id, entry: ENTRY, picks: PICKS, chips: CHIPS, transfers: TRANSFERS })); } catch (e) {}
+  renderTeamCards();
+}
+
+function loadTeamCache() {
+  try { return JSON.parse(localStorage.getItem("fplTeamCache")); } catch (e) { return null; }
+}
+
+function renderTeamCards() {
+  if (PICKS) {
+    safeRender(renderCaptaincy, "captainCard", "Captaincy");
+    safeRender(renderFixtureRuns, "runsCard", "Fixture runs");
+    safeRender(renderTransfers, "transferCard", "Transfer ideas");
+    safeRender(renderPriceWatch, "priceCard", "Price watch");
+    safeRender(renderActions, "actionsCard", "Do this week");
+    $("briefCard").classList.remove("hide");
+    restoreCachedBrief();
+    saveRecommendation();
+    reviewLastWeek();          // async, fills its own card when ready
+  }
+  if (CHIPS) safeRender(renderChips, "chipsCard", "Chips");
+}
+
+/* ---------------- helpers on live data ---------------- */
+const playerOf = (elId) => PLAYER_BY_ID.get(elId);
+const teamOf   = (tId)  => TEAM_BY_ID.get(tId) || { name:"Unknown", short_name:"???" };
+
+const squadPlayers = () => (PICKS?.picks || []).map(pk => playerOf(pk.element)).filter(Boolean);
+const pickOf = (elId) => (PICKS?.picks || []).find(pk => pk.element === elId);
+const isStarter = (elId) => { const pk = pickOf(elId); return pk ? pk.position <= 11 : true; };
+const bankTenths = () => (PICKS?.entry_history ? PICKS.entry_history.bank : 0) || 0;
+
+function teamFixturesIn(tId, eventId) {
+  const week = FIX_BY_EVENT.get(eventId) || [];
+  const out = [];
+  for (const f of week) {
+    if (f.team_h !== tId && f.team_a !== tId) continue;
+    const home = f.team_h === tId;
+    out.push({ home, opp: teamOf(home ? f.team_a : f.team_h), diff: home ? f.team_h_difficulty : f.team_a_difficulty });
+  }
+  return out;
+}
+const teamFixtures = (tId) => ACTIVE_GW ? teamFixturesIn(tId, ACTIVE_GW.id) : [];
+
+function nextEvents(n) {
+  if (!ACTIVE_GW) return [];
+  return DB.events.filter(e => e.id >= ACTIVE_GW.id).slice(0, n);
+}
+
+function horizonEase(tId) {
+  if (EASE_CACHE.has(tId)) return EASE_CACHE.get(tId);
+  let ease = 0; const weeks = [];
+  for (const ev of nextEvents(HORIZON)) {
+    const fxs = teamFixturesIn(tId, ev.id);
+    for (const f of fxs) ease += (6 - f.diff);
+    weeks.push({ gw: ev.id, fxs });
+  }
+  const result = { ease, weeks };
+  EASE_CACHE.set(tId, result);
+  return result;
+}
+
+const finishedGWs = () => DB.events.filter(e => e.finished).length;
+
+/* --- v2.3: set pieces ---
+   The single biggest edge in the raw data that a form/xGI model misses.
+   A first-choice penalty taker converts roughly 5–8 extra goals a season
+   that the underlying numbers don't attribute to him in advance. Weighted
+   below form and xGI on purpose — it's a tiebreaker, not the whole case. */
+function setPieceBonus(p) {
+  if (p.element_type === 1) return 0;             // goalkeepers: not applicable
+  let b = 0;
+  if (p.penalties_order === 1) b += 2.5;
+  else if (p.penalties_order === 2) b += 0.8;     // backup taker: real but small
+  if (p.direct_freekicks_order === 1) b += 0.6;
+  if (p.corners_and_indirect_freekicks_order === 1) b += 0.4;
+  return b;
+}
+function spBadges(p) {
+  const out = [];
+  if (p.penalties_order === 1) out.push('<span class="badge pen">PENS</span>');
+  else if (p.penalties_order === 2) out.push('<span class="badge sp">PEN 2</span>');
+  if (p.direct_freekicks_order === 1) out.push('<span class="badge sp">FK</span>');
+  if (p.corners_and_indirect_freekicks_order === 1) out.push('<span class="badge sp">CNR</span>');
+  return out.join(" ");
+}
+
+/* --- v2.3: start reliability ---
+   v2.2 used total minutes / (gameweeks × 90). That treats a player who came
+   off the bench six times the same as one who started three full games, and
+   the bench player is the far riskier captain. `starts` is the honest signal;
+   minutes is kept as a fallback for cached data from before this version. */
+function startReliability(p) {
+  const g = finishedGWs();
+  if (g < 3) return 1;                            // sample too small to punish anyone
+  if (Number.isFinite(p.starts)) return Math.min(1, p.starts / g);
+  return Math.min(1, (p.minutes || 0) / (g * 90));
+}
+
+function attackThreat(p) {
+  const form = num(p.form);
+  const xgi90 = num(p.expected_goal_involvements_per_90);
+  const sp = setPieceBonus(p);
+  const rel = startReliability(p);
+  const raw = form * 2 + xgi90 * 8 + sp;
+  return { attack: +(raw * rel).toFixed(1), mins: Math.round(rel * 100), form, xgi90, sp:+sp.toFixed(1) };
+}
+
+function decisionScore(p) {
+  // CAPTAINCY view: this gameweek only.
+  const fxs = teamFixtures(p.team);
+  const ease = fxs.reduce((s,f) => s + (6 - f.diff), 0);
+  const a = attackThreat(p);
+  return { ...a, ease:+(ease*3).toFixed(1), fxs, xp: num(p.ep_next),
+           total:+(a.attack + ease*3).toFixed(1), flagged: p.status !== "a" };
+}
+
+function transferScore(p) {
+  // TRANSFER view: threat + fixture run over the next 5 GWs.
+  if (SCORE_CACHE.has(p.id)) return SCORE_CACHE.get(p.id);
+  const h = horizonEase(p.team);
+  const a = attackThreat(p);
+  const result = { ...a, horizon: h.ease, weeks: h.weeks, total:+(a.attack + h.ease).toFixed(1) };
+  SCORE_CACHE.set(p.id, result);
+  return result;
+}
+
+/* --- v2.3: exact selling price ---
+   FPL rule: you keep the full purchase price plus HALF of any rise, rounded
+   down to the nearest £0.1m. A price fall is taken in full.
+   Purchase price comes from your transfer history; for players you've had
+   since GW1 it's today's price minus everything it has moved since the start
+   (cost_change_start). No approximation left. */
+function purchasePrice(p) {
+  let latest = null;
+  for (const t of TRANSFERS) {
+    if (t.element_in === p.id && (!latest || t.event > latest.event)) latest = t;
+  }
+  if (latest && Number.isFinite(latest.element_in_cost)) return latest.element_in_cost;
+  if (Number.isFinite(p.cost_change_start)) return p.now_cost - p.cost_change_start;
+  return p.now_cost;                                // unknown — assume no profit
+}
+function sellingPrice(p) {
+  const bought = purchasePrice(p);
+  const profit = p.now_cost - bought;
+  return profit > 0 ? bought + Math.floor(profit / 2) : p.now_cost;
+}
+const hasExactPrices = () => TRANSFERS.length > 0 || DB.elements.some(p => Number.isFinite(p.cost_change_start));
+
+/* --- v2.3: ownership framing ---
+   FPL is a rank game. Owning a 55%-owned striker who hauls gains you nothing
+   on the field; NOT owning him loses you a chunk of rank. So ownership isn't
+   trivia, it's risk direction. */
+function ownershipTag(p) {
+  const own = num(p.selected_by_percent);
+  if (own >= 35) return { kind:"template", html:`<span class="badge tpl">TEMPLATE ${own.toFixed(0)}%</span>` };
+  if (own <= 3)  return { kind:"differential", html:`<span class="badge dif">DIFF ${own.toFixed(1)}%</span>` };
+  return { kind:"normal", html:"" };
+}
+function templateRisks() {
+  // Highly-owned players you don't have. Each is rank you bleed on a haul.
+  const squadIds = new Set((PICKS?.picks || []).map(pk => pk.element));
+  return DB.elements
+    .filter(p => !squadIds.has(p.id) && p.status === "a" && num(p.selected_by_percent) >= 35)
+    .sort((a,b) => num(b.selected_by_percent) - num(a.selected_by_percent))
+    .slice(0, 3);
+}
+
+/* --- v2.3: price pressure ---
+   FPL's real price algorithm is private. This is a transparent proxy: net
+   transfers this gameweek as a share of active managers. Treat it as "under
+   pressure", never as a prediction. */
+function pricePressure(p) {
+  const total = DB.total_players || 0;
+  if (!total) return 0;
+  const net = (p.transfers_in_event || 0) - (p.transfers_out_event || 0);
+  return +(net / total * 100).toFixed(3);
+}
+const RISE_ALERT = 0.35, FALL_ALERT = -0.35;   // % of managers, tuned to be quiet not chatty
+
+function priceWatch() {
+  const squad = squadPlayers();
+  const falling = squad.map(p => ({ p, pr: pricePressure(p) }))
+    .filter(x => x.pr <= FALL_ALERT).sort((a,b) => a.pr - b.pr);
+  const squadIds = new Set(squad.map(p => p.id));
+  const rising = DB.elements
+    .filter(p => !squadIds.has(p.id) && p.status === "a")
+    .map(p => ({ p, pr: pricePressure(p) }))
+    .filter(x => x.pr >= RISE_ALERT)
+    .sort((a,b) => b.pr - a.pr).slice(0, 4);
+  return { falling, rising };
+}
+
+function fxHtml(fxs) {
+  if (!fxs.length) return '<span class="fdr fdr5">BLANK</span>';
+  return fxs.map(f => `<span class="fdr fdr${f.diff}">${esc(f.opp.short_name)}${f.home?"(H)":"(A)"} ${f.diff}</span>`).join(" ");
+}
+function runHtml(weeks) {
+  return '<span class="runwrap">' + weeks.map(w => `<span class="gwcol">
+      <span class="gwnum">GW${w.gw}</span>
+      ${w.fxs.length
+        ? w.fxs.map(f => `<span class="fdr fdr${f.diff}">${esc(f.opp.short_name)}${f.home?"":"·a"}</span>`).join("")
+        : '<span class="fdr fdr0">—</span>'}
+    </span>`).join("") + '</span>';
+}
+
+/* ---------------- blank / double ---------------- */
+function blankDouble() {
+  if (!ACTIVE_GW) return { blanks: [], doubles: [] };
+  const counts = new Map(DB.teams.map(t => [t.id, 0]));
+  for (const f of (FIX_BY_EVENT.get(ACTIVE_GW.id) || [])) {
+    counts.set(f.team_h, (counts.get(f.team_h) || 0) + 1);
+    counts.set(f.team_a, (counts.get(f.team_a) || 0) + 1);
+  }
+  return {
+    blanks:  DB.teams.filter(t => counts.get(t.id) === 0).map(t => t.name),
+    doubles: DB.teams.filter(t => counts.get(t.id) >= 2).map(t => t.name),
+  };
+}
+
+function renderBlankDouble() {
+  const { blanks, doubles } = blankDouble();
+  if (!blanks.length && !doubles.length) return;
+  $("bdgwCard").classList.remove("hide");
+  $("bdgwBody").innerHTML =
+    (doubles.length ? `<div class="small" style="color:var(--lime)">DOUBLE: ${esc(doubles.join(", "))} play twice — captain and bench-boost territory.</div>` : "") +
+    (blanks.length ? `<div class="small" style="color:var(--danger); margin-top:6px">BLANK: ${esc(blanks.join(", "))} don't play — their players score nothing this week.</div>` : "");
+}
+
+/* ---------------- the decision core ----------------
+   Both the Actions card and the AI brief read from these two functions, so
+   the screen and the written brief can never disagree with each other. */
+function captainCall() {
+  const squad = squadPlayers().filter(p => p.element_type !== 1);
+  const ranked = squad.map(p => ({ p, s: decisionScore(p), starting: isStarter(p.id) }))
+                      .sort((a,b) => b.s.total - a.s.total);
+  const eligible = ranked.filter(r => r.s.fxs.length && !r.s.flagged);
+  const cap = eligible[0] || ranked.find(r => r.s.fxs.length) || null;
+  const vice = cap ? (eligible.find(r => r.p.team !== cap.p.team) || eligible[1] || null) : null;
+  // FPL's own forecast, as an independent check on our heuristic.
+  const byXp = [...ranked].filter(r => r.s.fxs.length).sort((a,b) => b.s.xp - a.s.xp);
+  const xpPick = byXp[0] || null;
+  return { ranked, cap, vice, xpPick, disagrees: !!(cap && xpPick && xpPick.p.id !== cap.p.id) };
+}
+
+function transferIdeas() {
+  const squadIds = new Set(PICKS.picks.map(pk => pk.element));
+  const squad = squadPlayers();
+  const clubCount = {};
+  squad.forEach(p => clubCount[p.team] = (clubCount[p.team]||0)+1);
+  const preSeason = finishedGWs() === 0;
+  const bank = bankTenths();
+
+  const byPos = new Map();
+  for (const c of DB.elements) {
+    if (c.status !== "a" || squadIds.has(c.id)) continue;
+    if (!preSeason && num(c.form) <= 0) continue;
+    if (!byPos.has(c.element_type)) byPos.set(c.element_type, []);
+    byPos.get(c.element_type).push(c);
+  }
+
+  const ideas = [];
+  for (const cur of squad) {
+    const urgent = cur.status !== "a";
+    // An unavailable player scores zero, so ANY available replacement beats him
+    // in reality — even one whose season stats look worse. Requiring a positive
+    // gain here meant an injured player in hot form got no suggestion at all,
+    // because his stale form figure still outranked every fit candidate.
+    const threshold = urgent ? -Infinity : GAIN_BAR;
+    const curScore = transferScore(cur).total;
+    const budget = sellingPrice(cur) + bank;      // exact, not an estimate
+    let best = null;
+    for (const c of (byPos.get(cur.element_type) || [])) {
+      if (c.now_cost > budget) continue;
+      const cc = (clubCount[c.team]||0) - (c.team === cur.team ? 1 : 0);
+      if (cc >= 3) continue;
+      const gain = transferScore(c).total - curScore;
+      if (gain > threshold && (!best || gain > best.gain)) {
+        best = { out: cur, in: c, gain:+gain.toFixed(1), urgent,
+                 delta: c.now_cost - sellingPrice(cur), spare: budget - c.now_cost };
+      }
+    }
+    if (best) ideas.push(best);
+  }
+  ideas.sort((a,b) => (Number(b.urgent) - Number(a.urgent)) || (b.gain - a.gain));
+  return ideas.slice(0, 5);
+}
+
+/* Best idea that did NOT clear the bar — needed to say "hold, and here's
+   how close the nearest thing came", which is more useful than silence. */
+function nearMiss() {
+  const squadIds = new Set(PICKS.picks.map(pk => pk.element));
+  const squad = squadPlayers();
+  const bank = bankTenths();
+  let best = null;
+  for (const cur of squad) {
+    if (cur.status !== "a") continue;
+    const curScore = transferScore(cur).total;
+    const budget = sellingPrice(cur) + bank;
+    for (const c of DB.elements) {
+      if (c.element_type !== cur.element_type || squadIds.has(c.id) || c.status !== "a") continue;
+      if (c.now_cost > budget) continue;
+      const gain = transferScore(c).total - curScore;
+      if (!best || gain > best.gain) best = { out: cur, in: c, gain:+gain.toFixed(1) };
+    }
+  }
+  return best;
+}
+
+/* ---------------- ACTIONS: what to do, and why ---------------- */
+function actionRow(mark, colour, doText, whyText) {
+  return `<div class="act">
+    <div class="actmark" style="color:${colour}">${mark}</div>
+    <div style="flex:1">
+      <div class="actdo">${doText}</div>
+      <div class="actwhy">${whyText}</div>
+    </div>
+  </div>`;
+}
+
+function renderActions() {
+  $("actionsCard").classList.remove("hide");
+  $("actionsGw").textContent = ACTIVE_GW ? ACTIVE_GW.name : "latest squad";
+
+  const { cap, vice, xpPick, disagrees } = captainCall();
+  const ideas = transferIdeas();
+  const { blanks, doubles } = blankDouble();
+  const squad = squadPlayers();
+  const flagged = squad.filter(p => p.status !== "a");
+  const gwPlayed = finishedGWs();
+  let html = "";
+
+  /* 1. CAPTAIN — the biggest single lever in the game. */
+  if (cap) {
+    const s = cap.s;
+    const reasons = [];
+    if (s.sp >= 2.5) reasons.push("takes the penalties");
+    if (s.form >= 5) reasons.push(`form ${s.form}`);
+    if (s.xgi90 >= 0.5) reasons.push(`${s.xgi90} xGI/90`);
+    const fx = s.fxs.map(f => `${f.opp.short_name}${f.home?" (H)":" (A)"}, difficulty ${f.diff}`).join(" and ");
+    const why = `Top of the model at ${s.total}${reasons.length ? " — " + reasons.join(", ") : ""}. Fixture: ${esc(fx)}.` +
+      (s.mins < 100 ? ` Starts in only ${s.mins}% of gameweeks, so there is rotation risk.` : "") +
+      (disagrees && xpPick ? ` FPL's own forecast prefers ${esc(xpPick.p.web_name)} (xP ${xpPick.s.xp} vs ${s.xp}) — worth a look before you commit.` : "") +
+      (gwPlayed < 3 ? ` Only ${gwPlayed} gameweek${gwPlayed===1?"":"s"} played, so this leans heavily on fixtures.` : "");
+    html += actionRow("C", "var(--lime)",
+      `Captain <b>${esc(cap.p.web_name)}</b>${vice ? `, vice ${esc(vice.p.web_name)}` : ""}`, why);
+  }
+
+  /* 2. TRANSFERS — including, loudly, the option of doing nothing. */
+  const urgent = ideas.filter(i => i.urgent);
+  if (urgent.length) {
+    const i = urgent[0];
+    const worse = i.gain < 0;
+    html += actionRow("!", "var(--warn)",
+      `Replace <b>${esc(i.out.web_name)}</b> with <b>${esc(i.in.web_name)}</b>`,
+      `${esc(i.out.web_name)} is ${esc(i.out.news || "flagged")} (${i.out.chance_of_playing_next_round ?? 0}% chance of playing). ` +
+      `${esc(i.in.web_name)} costs ${fmtM(i.in.now_cost)}, leaving ${fmtM(i.spare)} spare. ` +
+      (worse
+        ? `On season stats he rates ${Math.abs(i.gain)} lower — but that comparison flatters an injured player whose form was earned before he got hurt. `
+        : `He scores +${i.gain} more over the next ${HORIZON} gameweeks. `) +
+      `An unavailable player is a guaranteed zero, so this is the one transfer that pays for itself.`);
+  } else {
+    const good = ideas.filter(i => !i.urgent);
+    if (good.length) {
+      const i = good[0];
+      html += actionRow("→", "var(--lime)",
+        `Consider <b>${esc(i.out.web_name)}</b> → <b>${esc(i.in.web_name)}</b>`,
+        `Worth +${i.gain} over the next ${HORIZON} gameweeks, clearing the +${GAIN_BAR} bar a free transfer should meet. ` +
+        `${i.delta > 0 ? `Costs ${fmtM(i.delta)} more` : `Frees up ${fmtM(-i.delta)}`}, leaving ${fmtM(i.spare)} in the bank. ` +
+        `Not urgent — if you're unsure, rolling the transfer keeps your options open for next week.`);
+    } else {
+      const nm = nearMiss();
+      html += actionRow("=", "var(--dim)",
+        `<b>Hold your transfer</b>`,
+        (nm ? `The best available move (${esc(nm.out.web_name)} → ${esc(nm.in.web_name)}) is worth only +${nm.gain} over ${HORIZON} gameweeks, under the +${GAIN_BAR} bar. `
+            : `Nothing affordable improves the squad. `) +
+        `Rolling gives you two transfers next week, which is worth more than a marginal move now. ` +
+        `Most points lost in FPL are lost to unnecessary transfers, not missed ones.`);
+    }
+  }
+
+  /* 3. Things that will bite you if ignored. */
+  if (flagged.length > (urgent.length ? 1 : 0)) {
+    html += actionRow("⚠", "var(--warn)", `Check ${flagged.length} flagged player${flagged.length===1?"":"s"} before the deadline`,
+      flagged.map(p => `${esc(p.web_name)} ${p.chance_of_playing_next_round ?? 0}%${p.news ? " — " + esc(p.news) : ""}`).join(" · ") +
+      `. Press conferences land the day before the deadline; a 50% flag usually resolves by then.`);
+  }
+  if (doubles.length) {
+    html += actionRow("×2", "var(--lime)", `Double gameweek: ${esc(doubles.join(", "))}`,
+      `These clubs play twice, so their players get two chances to score. This is when Bench Boost and Triple Captain are worth far more than in a normal week.`);
+  }
+  if (blanks.length) {
+    html += actionRow("∅", "var(--danger)", `Blank gameweek: ${esc(blanks.join(", "))}`,
+      `These clubs don't play at all — their players score zero however good the form. Check your starting eleven has eleven players who actually have a fixture.`);
+  }
+
+  const { falling } = priceWatch();
+  if (falling.length) {
+    html += actionRow("↓", "var(--warn)", `${falling.length} of your players under price-fall pressure`,
+      falling.map(x => `${esc(x.p.web_name)} (${x.pr}% of managers selling)`).join(" · ") +
+      `. Only act on this if you were already moving them on — chasing price changes is how people talk themselves into bad transfers.`);
+  }
+
+  const risks = templateRisks();
+  if (risks.length) {
+    html += actionRow("%", "var(--lilac)", `You don't own ${risks.map(p => esc(p.web_name)).join(", ")}`,
+      `Owned by ${risks.map(p => `${esc(p.web_name)} ${num(p.selected_by_percent).toFixed(0)}%`).join(", ")} of managers. ` +
+      `FPL is a rank game: when a heavily-owned player hauls, everyone who has him gains on you. Not a reason to buy blindly — a reason to know where your rank risk sits.`);
+  }
+
+  $("actionsBody").innerHTML = html;
+  $("actionsFoot").innerHTML =
+    `Every line above is generated from the cards below — scroll down for the working. ` +
+    (hasExactPrices() ? `Prices account for your exact selling value.` : `Selling prices are approximate until your transfer history loads.`);
+}
+
+/* ---------------- captaincy card ---------------- */
+function renderCaptaincy() {
+  $("captainCard").classList.remove("hide");
+  $("captainGw").textContent = ACTIVE_GW ? ACTIVE_GW.name : "latest squad";
+  const { ranked, cap, vice } = captainCall();
+
+  let html = "";
+  if (cap) {
+    html += `<div class="armband"><div class="cbadge">C</div><div>
+      <div style="font-family:var(--disp);font-weight:700;font-size:17px">${esc(cap.p.web_name)} ${spBadges(cap.p)}</div>
+      <div class="dim" style="font-size:11.5px">${esc(teamOf(cap.p.team).name)} · score ${cap.s.total} · xP ${cap.s.xp} · ${fxHtml(cap.s.fxs)}</div>
+    </div></div>`;
+  }
+  if (vice) {
+    html += `<div class="armband vice"><div class="cbadge vice">VC</div><div>
+      <div style="font-family:var(--disp);font-weight:700;font-size:14px">${esc(vice.p.web_name)} ${spBadges(vice.p)}</div>
+      <div class="dim" style="font-size:11.5px">${esc(teamOf(vice.p.team).name)} · score ${vice.s.total} · xP ${vice.s.xp} · ${fxHtml(vice.s.fxs)}</div>
+    </div></div>`;
+  }
+
+  const currentCap = (PICKS.picks || []).find(pk => pk.is_captain);
+  if (currentCap && cap && currentCap.element !== cap.p.id) {
+    const cur = playerOf(currentCap.element);
+    if (cur) html += `<div class="small" style="color:var(--warn);margin:10px 0 2px">
+      You have ${esc(cur.web_name)} captained — this model prefers ${esc(cap.p.web_name)}. Your call.</div>`;
+  }
+
+  html += ranked.map(({p,s,starting},i) => `
+    <div style="padding:9px 0;border-bottom:1px solid rgba(61,36,84,.3)" class="${starting ? "" : "bench"}">
+      <div class="row">
+        <span class="mono" style="font-size:11px;color:var(--faint);width:18px">${i+1}</span>
+        <span style="font-weight:600;font-size:13.5px;flex:1">${esc(p.web_name)}
+          <span class="dim" style="font-weight:400;font-size:11px">${esc(teamOf(p.team).short_name)}</span>
+          ${spBadges(p)}
+          ${starting ? "" : '<span class="badge">BENCH</span>'}
+          ${s.flagged ? `<span style="color:var(--warn);font-size:10px"> ⚠ ${p.chance_of_playing_next_round ?? 0}% — ${esc(p.news || "flagged")}</span>` : ""}
+        </span>
+        ${fxHtml(s.fxs)}
+        <span class="xp">xP ${s.xp}</span>
+        <span class="mono" style="font-size:13px;color:${i===0?"var(--lime)":"var(--ink)"}">${s.fxs.length ? s.total : "—"}</span>
+      </div>
+      ${s.fxs.length ? `<div class="breakdown">attack ${s.attack} (form ${s.form} + xGI/90 ${s.xgi90}${s.sp ? ` + set pieces ${s.sp}` : ""}${s.mins < 100 ? `, ×${s.mins}% starts` : ""}) + fixtures ${s.ease}</div>` : ""}
+    </div>`).join("");
+
+  if (finishedGWs() === 0) {
+    html += '<div class="dim small" style="margin-top:10px;color:var(--warn)">Pre-GW1: form, xGI and starts are all zero until football is played — this ranking is currently fixtures and set pieces only. It sharpens every week from GW1.</div>';
+  }
+  $("captainBody").innerHTML = html;
+}
+
+function renderFixtureRuns() {
+  $("runsCard").classList.remove("hide");
+  const teams = [...new Set(squadPlayers().map(p => p.team))];
+  const rows = teams.map(tId => ({ t: teamOf(tId), h: horizonEase(tId) }))
+    .sort((a,b) => b.h.ease - a.h.ease);
+  $("runsBody").innerHTML = rows.map(({t,h}) => `
+    <div class="listrow">
+      <span style="font-weight:600;font-size:12.5px;flex:0 0 44px">${esc(t.short_name)}</span>
+      ${runHtml(h.weeks)}
+      <span class="mono" style="font-size:12px;color:var(--lilac);flex:0 0 auto">${h.ease}</span>
+    </div>`).join("") +
+    `<div class="dim small" style="margin-top:8px">Number = total ease over the next ${HORIZON} GWs (higher is better; a double counts twice, a blank adds nothing). Green fixtures easy, red hard — official FPL difficulty ratings. Away games marked ·a.</div>`;
+}
+
+function renderTransfers() {
+  $("transferCard").classList.remove("hide");
+  const flagged = squadPlayers().filter(p => p.status !== "a");
+  let html = "";
+  if (flagged.length) {
+    html += '<div class="small" style="color:var(--warn);margin:8px 0">Needs attention: ' +
+      flagged.map(p => `${esc(p.web_name)} (${p.chance_of_playing_next_round ?? 0}% — ${esc(p.news || p.status)})`).join(" · ") + '</div>';
+  }
+
+  const top = transferIdeas();
+  if (!top.length) {
+    const nm = nearMiss();
+    html += `<div class="dim small" style="margin-top:8px">
+      <b style="color:var(--ink)">Hold — nothing clears the bar.</b><br>` +
+      (nm ? `Closest option: ${esc(nm.out.web_name)} → ${esc(nm.in.web_name)}, worth +${nm.gain} over ${HORIZON} gameweeks against a +${GAIN_BAR} threshold.`
+          : `No affordable same-position upgrade exists in your squad's price range.`) +
+      `<br>Rolling the transfer is usually worth more than a marginal move.</div>`;
+  } else {
+    html += top.map(t => {
+      const sIn = transferScore(t.in);
+      const own = ownershipTag(t.in);
+      return `<div style="background:var(--surface2);border-radius:10px;padding:12px;margin-top:10px">
+        <div class="row" style="font-size:13.5px;flex-wrap:wrap">
+          ${t.urgent ? '<span class="badge" style="color:var(--warn);border-color:var(--warn)">FIX</span>' : ""}
+          <span style="color:var(--danger)">${esc(t.out.web_name)}</span><span style="color:var(--faint)">→</span>
+          <span style="color:var(--lime);font-weight:600">${esc(t.in.web_name)}</span>
+          ${spBadges(t.in)} ${own.html}
+          <span class="mono" style="margin-left:auto;font-size:12px;color:${t.delta>0?"var(--warn)":"var(--lime)"}">${t.delta>0?"+":""}${(t.delta/10).toFixed(1)}m</span>
+        </div>
+        <div class="dim" style="font-size:11.5px;margin-top:6px;line-height:1.55">
+          ${esc(t.in.web_name)} (${esc(teamOf(t.in.team).short_name)}, ${fmtM(t.in.now_cost)}): form ${esc(t.in.form)},
+          xGI/90 ${sIn.xgi90}${sIn.sp ? `, set pieces +${sIn.sp}` : ""}${sIn.mins < 100 ? `, starts ${sIn.mins}% of weeks` : ""}, xP ${num(t.in.ep_next)} next.
+          Sell ${esc(t.out.web_name)} for ${fmtM(sellingPrice(t.out))}, leaving ${fmtM(t.spare)} spare.
+          Worth +${t.gain} over ${HORIZON} GWs.
+        </div>
+        <div style="margin-top:6px">${runHtml(sIn.weeks)}</div>
+      </div>`;
+    }).join("");
+  }
+  $("transferBody").innerHTML = html;
+  $("transferFoot").innerHTML =
+    `A move must be worth <b>+${GAIN_BAR} over ${HORIZON} gameweeks</b> to show here — a bar, not a suggestion engine. ` +
+    `Injured and suspended players bypass the bar, because an unavailable player scores zero regardless. ` +
+    (hasExactPrices()
+      ? `Selling prices are exact: purchase price plus half of any rise, rounded down, per FPL's rule.`
+      : `Selling prices fall back to current market price until your transfer history is available.`) +
+    ` Scores compare attacking threat plus fixture run — a shortlist to interrogate, not an instruction.`;
+}
+
+function renderPriceWatch() {
+  const { falling, rising } = priceWatch();
+  if (!falling.length && !rising.length) return;
+  $("priceCard").classList.remove("hide");
+  let html = "";
+  if (falling.length) {
+    html += `<div class="small" style="color:var(--warn)">Your players losing value:</div>` +
+      falling.map(x => `<div class="listrow small">
+        <span style="flex:1">${esc(x.p.web_name)} <span class="dim">${esc(teamOf(x.p.team).short_name)}</span></span>
+        <span class="mono" style="color:var(--danger)">${x.pr}%</span></div>`).join("");
+  }
+  if (rising.length) {
+    html += `<div class="small" style="color:var(--lime);margin-top:10px">Targets gaining value:</div>` +
+      rising.map(x => `<div class="listrow small">
+        <span style="flex:1">${esc(x.p.web_name)} <span class="dim">${esc(teamOf(x.p.team).short_name)}</span> ${fmtM(x.p.now_cost)}</span>
+        <span class="mono" style="color:var(--lime)">+${x.pr}%</span></div>`).join("");
+  }
+  html += `<div class="dim small" style="margin-top:10px">Net transfers this gameweek as a share of active managers.
+    FPL's real pricing algorithm is private, so this is pressure, not prophecy — a player can sit on the edge for days.
+    <b>Never make a transfer you didn't already want in order to catch a price change:</b> £0.1m is worth far less than a wasted move.</div>`;
+  $("priceBody").innerHTML = html;
+}
+
+function renderChips() {
+  $("chipsCard").classList.remove("hide");
+  const used = (CHIPS.chips || []).map(c => `${esc(c.name)} (GW${c.event})`);
+  $("chipsBody").innerHTML = '<div class="small dim">' +
+    (used.length ? `Used: <b style="color:var(--ink)">${used.join(", ")}</b>.` : "No chips used yet — all available.") +
+    ' Save Bench Boost and Triple Captain for double gameweeks and Free Hit for the biggest blank; the alert card above will tell you when one arrives.</div>';
+}
+
+function renderGlobalForm() {
+  $("formCard").classList.remove("hide");
+  const hot = DB.elements
+    .filter(p => p.status === "a" && num(p.form) > 0)
+    .sort((a,b) => (num(b.form) - num(a.form)) || (b.total_points - a.total_points))
+    .slice(0, 10);
+  if (!hot.length) {
+    $("formBody").innerHTML = '<div class="dim small" style="margin-top:8px">No live form data — between seasons "form" resets to zero. This fills up from GW1.</div>';
+    return;
+  }
+  $("formBody").innerHTML = hot.map((p,i) => `
+    <div class="listrow">
+      <span class="mono" style="font-size:11px;color:var(--faint);width:18px">${i+1}</span>
+      <span class="badge">${POS[p.element_type]}</span>
+      <span style="flex:1;font-weight:600;font-size:13.5px">${esc(p.web_name)}
+        <span class="dim" style="font-weight:400;font-size:11px">${esc(teamOf(p.team).short_name)}</span> ${spBadges(p)}</span>
+      <span class="mono" style="font-size:12px;color:var(--lilac)">form ${esc(p.form)}</span>
+      <span class="mono" style="font-size:12px">${fmtM(p.now_cost)}</span>
+    </div>`).join("");
+}
+
+/* ---------------- post-gameweek review ----------------
+   The only feature that makes the tool get better, because it's the only one
+   that tells you whether the model is any good. Each week we store what was
+   recommended; once that gameweek finishes we fetch what actually happened
+   and score ourselves honestly, including the weeks we got it wrong. */
+function saveRecommendation() {
+  if (!ACTIVE_GW) return;
+  try {
+    const { cap } = captainCall();
+    const ideas = transferIdeas();
+    const yours = (PICKS.picks || []).find(pk => pk.is_captain);
+    const log = JSON.parse(localStorage.getItem("fplRecs") || "{}");
+    if (log[ACTIVE_GW.id]) return;                       // first call of the week wins
+    log[ACTIVE_GW.id] = {
+      gw: ACTIVE_GW.id,
+      capId: cap ? cap.p.id : null, capName: cap ? cap.p.web_name : null,
+      yourCapId: yours ? yours.element : null,
+      idea: ideas[0] ? { outId: ideas[0].out.id, outName: ideas[0].out.web_name,
+                         inId: ideas[0].in.id, inName: ideas[0].in.web_name, gain: ideas[0].gain } : null,
+      heldTransfer: ideas.length === 0,
+    };
+    // Keep the log small — the last 10 gameweeks is plenty.
+    const keys = Object.keys(log).map(Number).sort((a,b) => b - a).slice(10);
+    for (const k of keys) delete log[k];
+    localStorage.setItem("fplRecs", JSON.stringify(log));
+  } catch (e) { /* review is a bonus, never break the app for it */ }
+}
+
+async function reviewLastWeek() {
+  let log;
+  try { log = JSON.parse(localStorage.getItem("fplRecs") || "{}"); } catch (e) { return; }
+  const finished = DB.events.filter(e => e.finished).map(e => e.id);
+  const target = Object.values(log)
+    .filter(r => finished.includes(r.gw) && !r.reviewed)
+    .sort((a,b) => b.gw - a.gw)[0];
+  if (!target) return renderReviewFromLog(log);
+
+  let live;
+  try { live = await api(`event/${target.gw}/live/`); } catch (e) { return renderReviewFromLog(log); }
+  const pts = new Map((live?.elements || []).map(el => [el.id, el.stats?.total_points ?? 0]));
+
+  target.capPts   = target.capId   != null ? (pts.get(target.capId) ?? null) : null;
+  target.yourPts  = target.yourCapId != null ? (pts.get(target.yourCapId) ?? null) : null;
+  if (target.idea) {
+    target.idea.inPts  = pts.get(target.idea.inId) ?? null;
+    target.idea.outPts = pts.get(target.idea.outId) ?? null;
+  }
+  target.reviewed = true;
+  log[target.gw] = target;
+  try { localStorage.setItem("fplRecs", JSON.stringify(log)); } catch (e) {}
+  renderReviewFromLog(log);
+}
+
+function renderReviewFromLog(log) {
+  const done = Object.values(log).filter(r => r.reviewed);
+  if (!done.length) return;
+  const last = done.sort((a,b) => b.gw - a.gw)[0];
+  $("reviewCard").classList.remove("hide");
+
+  let html = "";
+  if (last.capName != null && last.capPts != null) {
+    const same = last.capId === last.yourCapId;
+    const diff = last.yourPts != null ? last.capPts - last.yourPts : null;
+    html += `<div class="small">Model captain in GW${last.gw}: <b>${esc(last.capName)}</b>, ${last.capPts} points` +
+      (same ? ` — which is who you captained.` :
+        (diff == null ? "." :
+          diff > 0 ? ` — ${diff} more than your pick.` :
+          diff < 0 ? ` — ${-diff} <span style="color:var(--warn)">fewer</span> than your pick.` :
+          ` — the same as your pick.`)) + `</div>`;
+  }
+  if (last.idea && last.idea.inPts != null && last.idea.outPts != null) {
+    const d = last.idea.inPts - last.idea.outPts;
+    html += `<div class="small" style="margin-top:6px">Suggested move ${esc(last.idea.outName)} → ${esc(last.idea.inName)}:
+      ${last.idea.inPts} vs ${last.idea.outPts} points, a ${d >= 0 ? "gain" : "loss"} of ${Math.abs(d)}.
+      <span class="dim">${d >= 4 ? "That would have covered a hit, which costs 4." : "A hit costs 4, so this wouldn't have paid for one."}</span></div>`;
+  } else if (last.heldTransfer) {
+    html += `<div class="small dim" style="margin-top:6px">No transfer was recommended in GW${last.gw}.</div>`;
+  }
+
+  // Running tally — one week means nothing, ten starts to mean something.
+  const scored = done.filter(r => r.capPts != null && r.yourPts != null && r.capId !== r.yourCapId);
+  if (scored.length >= 2) {
+    const wins = scored.filter(r => r.capPts > r.yourPts).length;
+    html += `<div class="small" style="margin-top:8px;color:var(--lilac)">Over ${scored.length} weeks where the model disagreed with you, it was right ${wins} time${wins===1?"":"s"}.</div>`;
+  }
+  html += `<div class="dim small" style="margin-top:8px">A single week is noise. This only becomes a fair verdict on the model after a couple of months — and if it keeps losing, the formula is wrong and worth changing.</div>`;
+  $("reviewBody").innerHTML = html;
+}
+
+/* ---------------- AI brief ---------------- */
+async function generateBrief() {
+  const btn = $("briefBtn"), body = $("briefBody");
+  btn.disabled = true; btn.textContent = "Thinking…";
+  body.textContent = "";
+
+  const squad = squadPlayers();
+  const { cap, xpPick, disagrees } = captainCall();
+  const nm = nearMiss();
+  const summary = {
+    gameweek: ACTIVE_GW ? ACTIVE_GW.name : "pre-season",
+    gameweeks_played: finishedGWs(),
+    transfer_bar: GAIN_BAR,
+    captaincy: squad.filter(p => p.element_type !== 1)
+      .map(p => { const s = decisionScore(p); return {
+        name: p.web_name, total: s.total, attack: s.attack, ease: s.ease,
+        form: s.form, xgi90: s.xgi90, set_pieces: s.sp, starts_pct: s.mins,
+        fpl_expected_points: s.xp, penalty_taker: p.penalties_order === 1,
+        owned_by_pct: num(p.selected_by_percent),
+        starting: isStarter(p.id), flagged: s.flagged }; })
+      .sort((a,b) => b.total - a.total).slice(0, 6),
+    model_vs_fpl_disagreement: disagrees && cap && xpPick
+      ? { model_pick: cap.p.web_name, fpl_xp_pick: xpPick.p.web_name } : null,
+    flagged: squad.filter(p => p.status !== "a")
+      .map(p => ({ name: p.web_name, chance: p.chance_of_playing_next_round, news: p.news })),
+    bank: bankTenths() / 10,
+    transfer_ideas: transferIdeas().map(t => ({
+      out: t.out.web_name, in: t.in.web_name, gain_over_5gw: t.gain,
+      net_cost: +(t.delta / 10).toFixed(1), urgent: t.urgent })),
+    best_idea_below_bar: nm ? { out: nm.out.web_name, in: nm.in.web_name, gain_over_5gw: nm.gain } : null,
+    fixture_runs_next5: [...new Set(squad.map(p => p.team))]
+      .map(tId => ({ team: teamOf(tId).short_name, ease: horizonEase(tId).ease })),
+    blanks_doubles: blankDouble(),
+    template_players_not_owned: templateRisks().map(p => ({ name: p.web_name, owned_by_pct: num(p.selected_by_percent) })),
+  };
+
+  try {
+    const r = await fetch("/api/brief", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-brief-pin": localStorage.getItem("briefPin") || "" },
+      body: JSON.stringify(summary),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 501) {
+      body.innerHTML = '<span style="color:var(--warn)">Not set up yet: add your ANTHROPIC_API_KEY in Vercel (project → Settings → Environment Variables) and redeploy — full steps in the README.</span>';
+    } else if (r.status === 401) {
+      localStorage.removeItem("briefPin");
+      const pin = prompt("This dashboard's AI brief is PIN-protected (you set BRIEF_PIN in Vercel). Enter your PIN:");
+      if (pin) {
+        localStorage.setItem("briefPin", pin.trim());
+        btn.disabled = false; btn.textContent = "Generate brief";
+        return generateBrief();
+      }
+      body.innerHTML = '<span style="color:var(--warn)">PIN required — nothing was generated, and no API credit spent.</span>';
+    } else if (!r.ok) {
+      body.innerHTML = `<span style="color:var(--danger)">Brief failed: ${esc(data.error || r.status)}. Try again in a minute.</span>`;
+    } else {
+      body.textContent = data.brief;
+      try { localStorage.setItem("briefCache", JSON.stringify({ gw: ACTIVE_GW ? ACTIVE_GW.id : 0, t: Date.now(), text: data.brief })); } catch (e) {}
+    }
+  } catch (e) {
+    body.innerHTML = '<span style="color:var(--danger)">Couldn\'t reach the brief function — check your deployment.</span>';
+  }
+  btn.disabled = false; btn.textContent = "Regenerate brief";
+}
+
+function restoreCachedBrief() {
+  try {
+    const c = JSON.parse(localStorage.getItem("briefCache"));
+    if (c && c.gw === (ACTIVE_GW ? ACTIVE_GW.id : 0) && c.text) {
+      $("briefBody").textContent = c.text;
+      $("briefBtn").textContent = "Regenerate brief";
+      $("briefBody").insertAdjacentHTML("beforeend",
+        `<div class="dim small" style="margin-top:8px">Saved brief from ${esc(new Date(c.t).toLocaleString())} — regenerate only if things have changed (each run costs a little API credit).</div>`);
+    }
+  } catch (e) {}
+}
+</script>
+</body>
+</html>
