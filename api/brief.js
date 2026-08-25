@@ -84,7 +84,7 @@ ${payload}`;
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 600,
+        max_tokens: 2000,
         messages: [{ role: "user", content: prompt }],
       }),
     });
@@ -104,8 +104,16 @@ ${payload}`;
       .join("\n")
       .trim();
 
-    if (!brief) {
+       if (!brief) {
       return res.status(502).json({ error: "The model returned an empty brief — try again." });
+    }
+
+    // If the model ran out of budget mid-sentence, say so rather than
+    // showing a truncated brief that looks like a rendering bug.
+    if (data.stop_reason === "max_tokens") {
+      return res.status(200).json({
+        brief: brief + "\n\n[Cut off — the model hit its token limit. Raise max_tokens in api/brief.js.]",
+      });
     }
 
     return res.status(200).json({ brief });
